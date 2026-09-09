@@ -1,0 +1,678 @@
+{
+	"info": {
+		"name": "Lecture 2 — Stripe Payment Testing",
+		"description": "Requests collection: auth, capture, refund, idempotency, decline codes.\n\nПеред початком:\n1. Створити Environment з змінною STRIPE_KEY = sk_test_ВАШ_КЛЮЧ\n2. Або встановити глобально",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "basic",
+		"basic": [
+			{ "key": "username", "value": "{{STRIPE_KEY}}" },
+			{ "key": "password", "value": "" }
+		]
+	},
+	"variable": [
+		{ "key": "BASE_URL", "value": "https://api.stripe.com/v1" },
+		{ "key": "STRIPE_KEY", "value": "sk_test_YOUR_KEY_HERE" }
+	],
+	"item": [
+		{
+			"name": "01 — Lifecycle (auth → capture)",
+			"item": [
+				{
+					"name": "1.1 Authorization (two-message)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.collectionVariables.set('PI_ID', json.id);",
+									"",
+									"pm.test('Status is requires_capture', function () {",
+									"    pm.expect(json.status).to.eql('requires_capture');",
+									"});",
+									"pm.test('Amount is 15000', function () {",
+									"    pm.expect(json.amount).to.eql(15000);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "15000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_visa" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "capture_method", "value": "manual" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" },
+								{ "key": "metadata[order_id]", "value": "order-demo-001" },
+								{ "key": "metadata[product]", "value": "headphones" }
+							]
+						},
+						"description": "Авторизація $150. Гроші заморожені, не списані.\nОчікуємо: status = requires_capture\nЗберігає PI_ID для наступного запиту."
+					}
+				},
+				{
+					"name": "1.2 Capture",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.test('Status is succeeded', function () {",
+									"    pm.expect(json.status).to.eql('succeeded');",
+									"});",
+									"pm.test('Amount received is 15000', function () {",
+									"    pm.expect(json.amount_received).to.eql(15000);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents/{{PI_ID}}/capture",
+						"description": "Capture авторизованої транзакції.\nОчікуємо: status = succeeded\nВикористовує PI_ID з попереднього запиту."
+					}
+				},
+				{
+					"name": "1.3 Double capture (має бути помилка!)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 400', function () {",
+									"    pm.response.to.have.status(400);",
+									"});",
+									"var json = pm.response.json();",
+									"pm.test('Error type is invalid_request', function () {",
+									"    pm.expect(json.error.type).to.eql('invalid_request_error');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents/{{PI_ID}}/capture",
+						"description": "Повторний capture — P0 тест.\nОчікуємо: 400 error (вже captured).\nЯкщо 200 — double charge баг."
+					}
+				},
+				{
+					"name": "1.4 Refund",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.test('Status is succeeded', function () {",
+									"    pm.expect(json.status).to.eql('succeeded');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/refunds",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "payment_intent", "value": "{{PI_ID}}" }
+							]
+						},
+						"description": "Refund після capture.\nОчікуємо: status = succeeded"
+					}
+				},
+				{
+					"name": "1.5 Get payment status",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.test('Has metadata', function () {",
+									"    pm.expect(json.metadata.order_id).to.eql('order-demo-001');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"url": "{{BASE_URL}}/payment_intents/{{PI_ID}}",
+						"description": "Polling — перевірити стан транзакції.\nFallback коли webhook не прийшов."
+					}
+				}
+			]
+		},
+		{
+			"name": "02 — Idempotency",
+			"item": [
+				{
+					"name": "2.1 Запит БЕЗ idempotency key (#1)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.collectionVariables.set('NO_KEY_ID_1', json.id);",
+									"console.log('ID without key #1:', json.id);"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_visa" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Перший запит без ключа. Запам'ятайте id."
+					}
+				},
+				{
+					"name": "2.2 Запит БЕЗ idempotency key (#2 — ІНШИЙ id!)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"var id1 = pm.collectionVariables.get('NO_KEY_ID_1');",
+									"pm.test('IDs are DIFFERENT (double charge!)', function () {",
+									"    pm.expect(json.id).to.not.eql(id1);",
+									"});",
+									"console.log('ID #1:', id1, 'ID #2:', json.id);"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_visa" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Другий запит без ключа → ІНШИЙ id → double charge!\nТест перевіряє що id різні."
+					}
+				},
+				{
+					"name": "2.3 Запит З idempotency key (#1)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.collectionVariables.set('WITH_KEY_ID', json.id);",
+									"console.log('ID with key #1:', json.id);"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"header": [
+							{ "key": "Idempotency-Key", "value": "charge-order-demo-{{$timestamp}}" }
+						],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_visa" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Перший запит з ключем. Запам'ятайте id.\nКлюч використовує timestamp — запустіть 2.3 і 2.4 підряд швидко!"
+					}
+				},
+				{
+					"name": "2.4 Запит З ТИМ САМИМ key (#2 — ОДНАКОВИЙ id!)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"var id1 = pm.collectionVariables.get('WITH_KEY_ID');",
+									"pm.test('IDs are SAME (one charge!)', function () {",
+									"    pm.expect(json.id).to.eql(id1);",
+									"});",
+									"console.log('ID #1:', id1, 'ID #2:', json.id);"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"header": [
+							{ "key": "Idempotency-Key", "value": "charge-order-demo-{{$timestamp}}" }
+						],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_visa" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Той самий ключ → той самий id → одне списання!\nТест перевіряє що id однакові.\n\n⚠️ Запустіть одразу після 2.3 — ключ має збігатись."
+					}
+				}
+			]
+		},
+		{
+			"name": "03 — Decline codes",
+			"item": [
+				{
+					"name": "3.01 ✅ Successful payment",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.test('Status is succeeded', function () {",
+									"    pm.expect(json.status).to.eql('succeeded');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_visa" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Базовий успішний платіж для порівняння."
+					}
+				},
+				{
+					"name": "3.02 ❌ Generic decline (do_not_honor)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 402', function () { pm.response.to.have.status(402); });",
+									"var json = pm.response.json();",
+									"pm.test('Decline code is generic_decline', function () {",
+									"    pm.expect(json.error.decline_code).to.eql('generic_decline');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_chargeDeclined" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "ISO 8583 code 05 — do_not_honor.\n⛔ NON-RETRYABLE — не ретраїти 30 днів.\nVisa Retry Rules: VAMP штрафи від $25000/міс."
+					}
+				},
+				{
+					"name": "3.03 ❌ Insufficient funds",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 402', function () { pm.response.to.have.status(402); });",
+									"var json = pm.response.json();",
+									"pm.test('Decline code is insufficient_funds', function () {",
+									"    pm.expect(json.error.decline_code).to.eql('insufficient_funds');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_chargeDeclinedInsufficientFunds" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "ISO 8583 code 51 — недостатньо коштів.\n⛔ NON-RETRYABLE — баланс не зміниться сам.\nПоказати клієнту: «Недостатньо коштів. Спробуйте іншу картку.»"
+					}
+				},
+				{
+					"name": "3.04 ❌ Expired card",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 402', function () { pm.response.to.have.status(402); });",
+									"var json = pm.response.json();",
+									"pm.test('Decline code is expired_card', function () {",
+									"    pm.expect(json.error.decline_code).to.eql('expired_card');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_chargeDeclinedExpiredCard" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "ISO 8583 code 54 — картка протермінована.\n⛔ NON-RETRYABLE — ніколи не допоможе.\nПоказати клієнту: «Термін дії картки вичерпано.»"
+					}
+				},
+				{
+					"name": "3.05 ❌ Incorrect CVC",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 402', function () { pm.response.to.have.status(402); });",
+									"var json = pm.response.json();",
+									"pm.test('Decline code is incorrect_cvc', function () {",
+									"    pm.expect(json.error.decline_code).to.eql('incorrect_cvc');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_chargeDeclinedIncorrectCvc" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Невірний CVC код.\nПоказати клієнту: «Перевірте CVC код на картці.»"
+					}
+				},
+				{
+					"name": "3.06 ❌ Processing error",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 402', function () { pm.response.to.have.status(402); });",
+									"var json = pm.response.json();",
+									"pm.test('Decline code is processing_error', function () {",
+									"    pm.expect(json.error.decline_code).to.eql('processing_error');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_chargeDeclinedProcessingError" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Технічна помилка обробки.\n✅ RETRYABLE — можна спробувати ще раз.\nПоказати клієнту: «Спробуйте ще раз.»"
+					}
+				},
+				{
+					"name": "3.07 ❌ Stolen card (lost_card)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 402', function () { pm.response.to.have.status(402); });",
+									"var json = pm.response.json();",
+									"pm.test('Decline code is lost_card or stolen_card', function () {",
+									"    var code = json.error.decline_code;",
+									"    pm.expect(['lost_card','stolen_card']).to.include(code);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_chargeDeclinedLostCard" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "ISO 8583 code 41 — картка втрачена/вкрадена.\n⛔ NON-RETRYABLE — retry = підозра на fraud.\nПоказати клієнту: «Картку відхилено. Зверніться до банку.»"
+					}
+				},
+				{
+					"name": "3.08 ❌ Radar block (antifraud)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 402', function () { pm.response.to.have.status(402); });",
+									"var json = pm.response.json();",
+									"pm.test('Blocked by Radar', function () {",
+									"    pm.expect(json.error.code).to.eql('card_declined');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_radarBlock" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Stripe Radar заблокував — antifraud.\nБлокується ДО Issuer — card network не бачить.\noutcome.type: blocked"
+					}
+				},
+				{
+					"name": "3.09 ⚠️ High risk (elevated)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.test('Status is succeeded', function () {",
+									"    pm.expect(json.status).to.eql('succeeded');",
+									"});",
+									"pm.test('Risk level is highest', function () {",
+									"    pm.expect(json.outcome.risk_level).to.eql('highest');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "5000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_riskLevelHighest" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" }
+							]
+						},
+						"description": "Транзакція проходить але risk_level: highest.\nRadar не заблокував — але позначив як високий ризик.\nДля review queue."
+					}
+				}
+			]
+		},
+		{
+			"name": "04 — Metadata",
+			"item": [
+				{
+					"name": "4.1 Create with metadata",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.collectionVariables.set('META_PI_ID', json.id);",
+									"pm.test('Has order_id metadata', function () {",
+									"    pm.expect(json.metadata.order_id).to.eql('order-7842');",
+									"});",
+									"pm.test('Has customer_email metadata', function () {",
+									"    pm.expect(json.metadata.customer_email).to.eql('user@shop.com');",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{BASE_URL}}/payment_intents",
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{ "key": "amount", "value": "15000" },
+								{ "key": "currency", "value": "usd" },
+								{ "key": "payment_method", "value": "pm_card_visa" },
+								{ "key": "confirm", "value": "true" },
+								{ "key": "automatic_payment_methods[enabled]", "value": "true" },
+								{ "key": "automatic_payment_methods[allow_redirects]", "value": "never" },
+								{ "key": "metadata[order_id]", "value": "order-7842" },
+								{ "key": "metadata[customer_email]", "value": "user@shop.com" },
+								{ "key": "metadata[product]", "value": "headphones" }
+							]
+						},
+						"description": "Транзакція з metadata.\nПісля виконання: Dashboard → Payments → клік на транзакцію → прокрутити вниз → Metadata."
+					}
+				},
+				{
+					"name": "4.2 Search by metadata",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var json = pm.response.json();",
+									"pm.test('Found transactions', function () {",
+									"    pm.expect(json.data.length).to.be.above(0);",
+									"});"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{BASE_URL}}/payment_intents/search?query=metadata['order_id']:'order-7842'",
+							"host": ["{{BASE_URL}}"],
+							"path": ["payment_intents", "search"],
+							"query": [
+								{ "key": "query", "value": "metadata['order_id']:'order-7842'" }
+							]
+						},
+						"description": "Пошук транзакції по order_id у metadata.\nАльтернатива Dashboard search."
+					}
+				}
+			]
+		}
+	]
+}
