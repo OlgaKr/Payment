@@ -1,0 +1,426 @@
+{
+  "info": {
+    "name": "Stripe 3DS Demo (Lesson 7)",
+    "description": "Колекція запитів для демонстрації різних сценаріїв 3D Secure 2.x через Stripe API.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. 3DS Frictionless Success",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded",
+            "description": "",
+            "disabled": false,
+            "type": "default"
+          }
+        ],
+        "auth": {
+          "type": "basic",
+          "basic": [
+            {
+              "key": "password",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "key": "username",
+              "value": "{{stripe_key}}",
+              "type": "string"
+            }
+          ]
+        },
+        "description": "Картка: 4000 0000 0000 3220. Очікуємо status = succeeded без додаткових дій. three_d_secure.result = authenticated.",
+        "url": {
+          "raw": "https://api.stripe.com/v1/payment_intents",
+          "protocol": "https",
+          "host": [
+            "api",
+            "stripe",
+            "com"
+          ],
+          "path": [
+            "v1",
+            "payment_intents"
+          ],
+          "query": [],
+          "variable": []
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "amount",
+              "value": "5000",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "currency",
+              "value": "usd",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "payment_method",
+              "value": "pm_card_threeDSecureOptional",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "confirm",
+              "value": "true",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "payment_method_types[0]",
+              "value": "card",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "payment_method_options[card][request_three_d_secure]",
+              "value": "any",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "2. 3DS Challenge Required",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded",
+            "description": "",
+            "disabled": false,
+            "type": "default"
+          }
+        ],
+        "auth": {
+          "type": "basic",
+          "basic": [
+            {
+              "key": "password",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "key": "username",
+              "value": "{{stripe_key}}",
+              "type": "string"
+            }
+          ]
+        },
+        "description": "Картка: 4000 0025 0000 3155. Очікуємо status = requires_action та посилання у next_action.redirect_to_url.url.",
+        "url": {
+          "raw": "https://api.stripe.com/v1/payment_intents",
+          "protocol": "https",
+          "host": [
+            "api",
+            "stripe",
+            "com"
+          ],
+          "path": [
+            "v1",
+            "payment_intents"
+          ],
+          "query": [],
+          "variable": []
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "amount",
+              "value": "5000",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "currency",
+              "value": "usd",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "payment_method",
+              "value": "pm_card_threeDSecure2Required",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "confirm",
+              "value": "true",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "payment_method_types[0]",
+              "value": "card",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "3. Standard Visa (No 3DS)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded",
+            "description": "",
+            "disabled": false,
+            "type": "default"
+          }
+        ],
+        "auth": {
+          "type": "basic",
+          "basic": [
+            {
+              "key": "password",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "key": "username",
+              "value": "{{stripe_key}}",
+              "type": "string"
+            }
+          ]
+        },
+        "description": "Картка: 4242 4242 4242 4242. Очікуємо status = succeeded, але блок three_d_secure відсутній.",
+        "url": {
+          "raw": "https://api.stripe.com/v1/payment_intents",
+          "protocol": "https",
+          "host": [
+            "api",
+            "stripe",
+            "com"
+          ],
+          "path": [
+            "v1",
+            "payment_intents"
+          ],
+          "query": [],
+          "variable": []
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "amount",
+              "value": "5000",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "currency",
+              "value": "usd",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "payment_method",
+              "value": "pm_card_visa",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "confirm",
+              "value": "true",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "return_url",
+              "value": "https://example.com/checkout/complete",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "4. Declined without 3DS",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded",
+            "description": "",
+            "disabled": false,
+            "type": "default"
+          }
+        ],
+        "auth": {
+          "type": "basic",
+          "basic": [
+            {
+              "key": "password",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "key": "username",
+              "value": "{{stripe_key}}",
+              "type": "string"
+            }
+          ]
+        },
+        "description": "Картка: 4000 0000 0000 0002. Очікуємо статус помилки card_declined.",
+        "url": {
+          "raw": "https://api.stripe.com/v1/payment_intents",
+          "protocol": "https",
+          "host": [
+            "api",
+            "stripe",
+            "com"
+          ],
+          "path": [
+            "v1",
+            "payment_intents"
+          ],
+          "query": [],
+          "variable": []
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "amount",
+              "value": "5000",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "currency",
+              "value": "usd",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "payment_method",
+              "value": "pm_card_chargeDeclined",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "confirm",
+              "value": "true",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            },
+            {
+              "key": "return_url",
+              "value": "https://example.com/checkout/complete",
+              "disabled": false,
+              "type": "default",
+              "description": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "1. GET Charge",
+      "protocolProfileBehavior": {
+        "disableBodyPruning": true
+      },
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded",
+            "description": "",
+            "disabled": false,
+            "type": "default"
+          }
+        ],
+        "auth": {
+          "type": "basic",
+          "basic": [
+            {
+              "key": "password",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "key": "username",
+              "value": "{{stripe_key}}",
+              "type": "string"
+            }
+          ]
+        },
+        "description": "Картка: 4000 0000 0000 3220. Очікуємо status = succeeded без додаткових дій. three_d_secure.result = authenticated.",
+        "url": {
+          "raw": "https://api.stripe.com/v1/charges/:id",
+          "protocol": "https",
+          "host": [
+            "api",
+            "stripe",
+            "com"
+          ],
+          "path": [
+            "v1",
+            "charges",
+            ":id"
+          ],
+          "query": [],
+          "variable": [
+            {
+              "key": "id",
+              "value": "ch_3UGhYfQpcYDzu4Ef01QCrW97"
+            }
+          ]
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": []
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "stripe_key",
+      "value": "sk_test_your_key_here",
+      "type": "default"
+    }
+  ]
+}
