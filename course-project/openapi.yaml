@@ -1,0 +1,540 @@
+openapi: 3.0.3
+info:
+  title: Merchant Payment Service
+  version: '1.0'
+  description: |
+    Payment backend of a small online shop, built on Stripe (test mode).
+
+    - Amounts are integers in **cents** (`5000` = $50.00). Only `usd` is supported.
+    - Run the service locally with `docker compose up -d` (see README.md).
+    - Full documentation with examples: API.md.
+servers:
+  - url: http://localhost:3000
+    description: Local Docker stack
+
+# No authentication: a local test service
+security: []
+
+tags:
+  - name: Payments
+    description: Create, list, capture and refund payments
+  - name: Webhooks
+    description: Events from Stripe
+  - name: Service
+    description: Health and frontend config
+
+paths:
+  /api/payments:
+    post:
+      tags: [Payments]
+      operationId: createPayment
+      summary: Create (and confirm) a payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequest'
+            examples:
+              automatic:
+                summary: Charge now
+                value:
+                  amount: 5000
+                  currency: usd
+                  payment_method: pm_card_visa
+                  capture_method: automatic
+                  customer_email: test@example.com
+                  description: 'Order #123'
+                  idempotency_key: order-123
+              manual:
+                summary: Authorize only (capture later)
+                value:
+                  amount: 5000
+                  payment_method: pm_card_visa
+                  capture_method: manual
+              declined:
+                summary: Declined card
+                value:
+                  amount: 5000
+                  payment_method: pm_card_chargeDeclinedInsufficientFunds
+              threeDSecure:
+                summary: 3D Secure card
+                value:
+                  amount: 5000
+                  payment_method: pm_card_threeDSecure2Required
+      responses:
+        '201':
+          description: |
+            Payment created. `status` is `succeeded` (automatic), `requires_capture` (manual) or
+            `requires_action` (3D Secure). `client_secret` is returned only in this response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedPayment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '402':
+          description: Card declined. The attempt is recorded as a payment with status `failed`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardError'
+              example:
+                error:
+                  type: card_error
+                  code: card_declined
+                  message: Your card was declined.
+                  decline_code: insufficient_funds
+    get:
+      tags: [Payments]
+      operationId: listPayments
+      summary: List payments (newest first)
+      parameters:
+        - name: page
+          in: query
+          description: Page number. Values below 1 or invalid values become 1.
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          description: Items per page. Values above 100 become 100; invalid values become 20.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: status
+          in: query
+          description: Only payments with this status.
+          schema:
+            $ref: '#/components/schemas/PaymentStatus'
+      responses:
+        '200':
+          description: One page of payments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentList'
+
+  /api/payments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PaymentId'
+    get:
+      tags: [Payments]
+      operationId: getPayment
+      summary: Get one payment
+      description: |
+        A payment in `requires_action` (3D Secure) is re-checked with Stripe when read, so its
+        status catches up after the customer completes or fails authentication.
+      responses:
+        '200':
+          description: The payment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/payments/{id}/capture:
+    parameters:
+      - $ref: '#/components/parameters/PaymentId'
+    post:
+      tags: [Payments]
+      operationId: capturePayment
+      summary: Capture an authorized payment
+      description: Only for payments with status `requires_capture` (created with `capture_method = manual`).
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureRequest'
+            examples:
+              full:
+                summary: Full amount
+                value: {}
+              partial:
+                summary: Partial capture
+                value:
+                  amount: 3000
+      responses:
+        '200':
+          description: Captured. The payment's `amount` is the captured amount.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapturedPayment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/payments/{id}/refund:
+    parameters:
+      - $ref: '#/components/parameters/PaymentId'
+    post:
+      tags: [Payments]
+      operationId: refundPayment
+      summary: Refund a captured payment (fully or partially)
+      description: |
+        Only for payments with status `succeeded`. A payment can be refunded in several parts;
+        the total refunded can never exceed the amount paid. The payment's status becomes
+        `refunded` once the full amount has been refunded.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+            examples:
+              full:
+                summary: Full refund
+                value: {}
+              partial:
+                summary: Partial refund
+                value:
+                  amount: 1000
+                  reason: Customer requested
+      responses:
+        '200':
+          description: Refund created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/webhooks:
+    post:
+      tags: [Webhooks]
+      operationId: receiveWebhook
+      summary: Receive a Stripe event
+      description: |
+        Stripe signs every event with the `Stripe-Signature` header
+        (https://docs.stripe.com/webhooks#verify-events).
+
+        | `type` | Effect on the payment (matched by PaymentIntent ID) |
+        |---|---|
+        | `payment_intent.succeeded` | status → `succeeded` |
+        | `payment_intent.payment_failed` | status → `failed` |
+        | `charge.refunded` | status → `refunded` (the Charge's `payment_intent` is used) |
+
+        Every event is stored in the `webhook_events` table; other types are ignored.
+      parameters:
+        - name: Stripe-Signature
+          in: header
+          required: true
+          description: Signature set by Stripe, e.g. `t=1728381600,v1=5257a869…`
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StripeEvent'
+            example:
+              id: evt_3UNvqXQpcYDzu4Ef0abc
+              object: event
+              type: payment_intent.succeeded
+              created: 1728381600
+              data:
+                object:
+                  id: pi_3UNvqXQpcYDzu4Ef0gYInc7D
+                  object: payment_intent
+                  amount: 5000
+                  status: succeeded
+      responses:
+        '200':
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received: { type: boolean, example: true }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/health:
+    get:
+      tags: [Service]
+      operationId: health
+      summary: Service and database health
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                {
+                  status: ok,
+                  db: connected,
+                  timestamp: '2026-10-08T10:00:00.000Z',
+                }
+        '503':
+          description: Database unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                {
+                  status: error,
+                  db: disconnected,
+                  timestamp: '2026-10-08T10:00:00.000Z',
+                }
+
+  /api/config:
+    get:
+      tags: [Service]
+      operationId: config
+      summary: Stripe publishable key for the frontend
+      responses:
+        '200':
+          description: Config
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  publishableKey: { type: string, example: pk_test_51Abc }
+
+components:
+  parameters:
+    PaymentId:
+      name: id
+      in: path
+      required: true
+      description: Payment UUID
+      schema: { type: string, format: uuid }
+
+  responses:
+    BadRequest:
+      description: |
+        `validation_error` (invalid input), `invalid_state` (action not allowed in the current
+        status) or `invalid_request` (malformed JSON, or rejected by Stripe).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              type: validation_error
+              message: amount must be a positive integer (in cents)
+    NotFound:
+      description: No payment with this ID
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              type: not_found
+              message: 'Payment not found: 00000000-0000-0000-0000-000000000000'
+
+  schemas:
+    PaymentStatus:
+      type: string
+      enum:
+        [
+          succeeded,
+          requires_capture,
+          requires_action,
+          failed,
+          canceled,
+          refunded,
+        ]
+      description: |
+        - `succeeded`: paid (captured)
+        - `requires_capture`: authorized only
+        - `requires_action`: waiting for 3D Secure
+        - `failed`: declined or 3D Secure failed
+        - `canceled`: canceled in Stripe
+        - `refunded`: the full amount has been refunded
+
+    CreatePaymentRequest:
+      type: object
+      required: [amount, payment_method]
+      properties:
+        amount:
+          type: integer
+          minimum: 50
+          description: Amount in cents. Stripe's minimum is 50 ($0.50).
+          example: 5000
+        currency:
+          type: string
+          enum: [usd]
+          default: usd
+        payment_method:
+          type: string
+          description: Stripe PaymentMethod ID, e.g. `pm_card_visa` (see API.md → Test payment methods)
+          example: pm_card_visa
+        capture_method:
+          type: string
+          enum: [automatic, manual]
+          default: automatic
+        customer_email:
+          type: string
+          format: email
+          example: test@example.com
+        description:
+          type: string
+          example: 'Order #123'
+        idempotency_key:
+          type: string
+          description: |
+            Unique key for this intended payment. A request retried with the same key must not
+            create a second payment.
+          example: order-123
+
+    Payment:
+      type: object
+      required:
+        [
+          id,
+          stripe_pi_id,
+          amount,
+          currency,
+          status,
+          capture_method,
+          created_at,
+          updated_at,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        stripe_pi_id: { type: string, example: pi_3UNvqXQpcYDzu4Ef0gYInc7D }
+        amount: { type: integer, example: 5000 }
+        currency: { type: string, example: usd }
+        status: { $ref: '#/components/schemas/PaymentStatus' }
+        capture_method: { type: string, enum: [automatic, manual] }
+        customer_email: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        metadata: { type: object }
+        idempotency_key: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreatedPayment:
+      allOf:
+        - $ref: '#/components/schemas/Payment'
+        - type: object
+          required: [client_secret]
+          properties:
+            client_secret:
+              type: string
+              description: For the checkout page (3D Secure). Returned only when the payment is created.
+              example: pi_3UNvqXQpcYDzu4Ef0gYInc7D_secret_Rk3
+
+    CapturedPayment:
+      allOf:
+        - $ref: '#/components/schemas/Payment'
+        - type: object
+          required: [captured_amount]
+          properties:
+            captured_amount: { type: integer, example: 5000 }
+
+    PaymentList:
+      type: object
+      required: [payments, total, page, limit]
+      properties:
+        payments:
+          type: array
+          items: { $ref: '#/components/schemas/Payment' }
+        total:
+          {
+            type: integer,
+            description: Payments matching the filter (all pages),
+            example: 42,
+          }
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 20 }
+
+    CaptureRequest:
+      type: object
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+          description: Amount to capture in cents. Default = full authorized amount. May be less, never more.
+
+    RefundRequest:
+      type: object
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+          description: Amount to refund in cents. Default = full amount. Total refunded never exceeds the amount paid.
+        reason:
+          type: string
+          example: Customer requested
+
+    Refund:
+      type: object
+      required: [id, payment_id, stripe_refund_id, amount, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        payment_id: { type: string, format: uuid }
+        stripe_refund_id: { type: string, example: re_3UNvqXQpcYDzu4Ef0UlXA0k6 }
+        amount: { type: integer, example: 3000 }
+        status: { type: string, enum: [succeeded] }
+        reason: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    StripeEvent:
+      type: object
+      required: [type]
+      properties:
+        id: { type: string, example: evt_3UNvqXQpcYDzu4Ef0abc }
+        object: { type: string, example: event }
+        type: { type: string, example: payment_intent.succeeded }
+        created: { type: integer }
+        data:
+          type: object
+          properties:
+            object:
+              type: object
+              description: The PaymentIntent (`pi_…`) or Charge (`ch_…`) the event is about
+              additionalProperties: true
+
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, error] }
+        db: { type: string, enum: [connected, disconnected] }
+        timestamp: { type: string, format: date-time }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type:
+              type: string
+              enum:
+                [
+                  validation_error,
+                  invalid_state,
+                  invalid_request,
+                  not_found,
+                  server_error,
+                ]
+            message: { type: string }
+
+    CardError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [type, code, message]
+          properties:
+            type: { type: string, enum: [card_error] }
+            code: { type: string, example: card_declined }
+            message: { type: string }
+            decline_code: { type: string, example: insufficient_funds }
